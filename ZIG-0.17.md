@@ -34,6 +34,7 @@ zig test probe.zig               # settle any doubt with a probe
 ## Contents
 
 0. [Agent protocol (read first)](#0-agent-protocol-read-first)
+   - [0.1 All in, one way, timeless](#01-all-in-one-way-timeless)
 1. [Version timeline and toolchain facts](#1-version-timeline-and-toolchain-facts)
 2. [Reflexes that no longer compile (0.15 → 0.17)](#2-reflexes-that-no-longer-compile-015--017)
 3. [0.16 → 0.17 at a glance](#3-016--017-at-a-glance)
@@ -85,8 +86,9 @@ mostly 0.14/0.15. Most of it no longer compiles. Follow these rules:
    point at them. The worst: `std.mem.containsAtLeastScalar` swapped its last
    two arguments; `@hasDecl` now ignores non-`pub` declarations; run-step path
    arguments became relative; `build()` results are cached.
-6. **Do not introduce compatibility shims** (wrapper functions that recreate
-   removed APIs) unless the user asks. Migrate to the 0.17 spelling.
+6. **All in, one way (§0.1).** Target 0.17.0 only. No compatibility shims,
+   no dual-version code, no deprecated spellings kept because they still
+   compile. Comments and docs describe the code as it is, never its history.
 7. **Done means:** `zig build` and `zig build test` pass, every published
    target/optimize mode builds, `zig fmt --check` passes on touched files, the
    §23 grep sweep is clean, and a representative workload in Debug is not
@@ -104,9 +106,60 @@ Do not rely on your pretrained knowledge of Zig APIs.
    after each family.
 4. When unsure of an API, read the 0.17 std source (`zig env` → std_dir) or
    compile a probe; never guess.
-5. Run the §23 grep sweep and check every §4 trap by hand.
-6. Finish only when build, tests, fmt --check and the sweep all pass.
+5. Go all in (§0.1): 0.17 only, no compatibility code, deprecated APIs
+   migrated too; comments and docs say how things work, never what changed.
+6. Run the §23 grep sweep and check every §4 trap by hand.
+7. Finish only when build, tests, fmt --check and the sweep all pass, and a
+   before/after benchmark shows no unexplained regression.
 ```
+
+### 0.1 All in, one way, timeless
+
+Migrations under this document follow one philosophy. Apply it to code,
+comments, docs, build scripts and generated output alike.
+
+**One version.** Code targets Zig 0.17.0 and nothing else. No dual-version
+code paths, no `@hasDecl`/`builtin.zig_version` checks to keep an older Zig
+working, no wrapper functions that recreate removed APIs, no "soft landing"
+period. When a project generates code for other projects, the generated code
+is 0.17 too, and its consumers move to 0.17 before they regenerate.
+
+**Adopt the idiom, not the minimum.** "Still compiles" is not the bar.
+Deprecated APIs are migrated in the same pass as removed ones:
+`@backingInt`/`@fromBackingInt`, `gpa.print`, `std.mem.print`, `list.last()`,
+`std.ArrayList`, `std.array_hash_map.*`, `std.bit_set.*`, `std.mem.find*`,
+`std.lang`, `.debug/.safe/.fast/.small`, `builtin.target.*`,
+`builtin.optimize.runtimeSafety()`, `SafeAllocator`, `BufferFirstAllocator`,
+`@splat`, `@divCeil`. Use the new tools where they fit instead of keeping the
+old workaround.
+
+**Timeless text.** Comments, doc comments, READMEs, AGENTS files, error
+messages and benchmark records describe how the code works *now*, in the
+present tense, as if it had always been this way. History lives in git (and a
+CHANGELOG if the project keeps one); plans live in the tracker.
+
+| Never write | Write |
+|---|---|
+| `// Zig 0.17 removed **, so we use @splat here` | nothing, or what the code means: `// zero-filled lookup table` |
+| `// was DebugAllocator` / `// formerly allocPrint` | nothing |
+| `// TODO: switch to @backingInt once everyone is on 0.17` | the 0.17 code itself |
+| "Nexus now needs Zig 0.17 (previously 0.16)." | "Nexus needs Zig 0.17." |
+| "We used to build lists with a struct literal; this no longer works." | "`extendList` reuses the spare capacity of a kept list." |
+| "Legacy notes for 0.16 are kept in `docs/zig-0.16/`." | delete the old notes; link the current reference |
+
+Words that signal a violation: *now, no longer, used to, previously,
+formerly, legacy, old, new (as in "the new API"), still, will, for now,
+until, migrated, since 0.17*. This guide itself is the one exception: its job
+is to map old spellings to new ones.
+
+**Delete, don't deprecate.** Remove superseded docs, helpers and dead
+compatibility branches outright. Git remembers them.
+
+**Optimize brutally, measure honestly.** Record a benchmark baseline *before*
+the first edit, re-run it after, on the same machine and inputs, and quantify
+run-to-run noise (run each side at least twice, interleave A/B runs).
+Numbers in docs are current measurements, stated plainly; a regression is
+reported with its cause, not hidden (§23.6).
 
 ---
 
@@ -2398,6 +2451,97 @@ sed -i '' -E 's/std\.builtin\./std.lang./g' FILES
 - The §23.2 hard-break and trap sweeps are empty or every hit reviewed.
 - A representative Debug workload shows no order-of-magnitude slowdown.
 - `git diff` contains only intended migrations; CI and docs name 0.17.0.
+
+### 23.5 Code generators and self-hosting projects
+
+Lessons from porting a parser generator whose output is compiled by other
+projects and whose own frontend is generated by itself.
+
+1. **Fix the emitter, never the output.** Generated files are build
+   artifacts. Change the templates and emitter code, regenerate, then review
+   the regenerated goldens.
+2. **`zig fmt` never sees code inside strings.** Multiline `\\` string
+   templates and `w.print("…")` format strings that *contain* Zig are invisible
+   to the formatter and to the compiler until the output is compiled. Grep the
+   emitter sources for old forms inside strings: `**`, `.fields`, `.decls`,
+   `@intFromEnum`, `@enumFromInt`, `getLast`, `ArrayListUnmanaged`,
+   `allocPrint`, `runtime_safety`, `enum(u16) {}`. A template kept as a real,
+   compiled `.zig` file (embedded with `@embedFile` and cut into sections) is
+   upgraded by `zig fmt` like any other source: prefer that design.
+3. **Bootstrap a self-hosted generator.** When the generator's own source
+   includes code it generated (a frontend parser, tables), 0.17 cannot build
+   it until it is regenerated, and it cannot be regenerated without building
+   it. Recipe:
+   ```bash
+   # 1. fix the emitter templates (step 2)
+   git show HEAD:build.zig > build16.zig                  # the pre-port build script
+   zig-0.16 build --build-file build16.zig && rm build16.zig
+   ./bin/tool its.grammar src/frontend/parser.zig         # regenerate with the emitter fix
+   zig build                                              # now with 0.17
+   ./bin/tool its.grammar src/frontend/parser.zig && zig build   # repeat until the output is a fixed point
+   ```
+   After the first 0.17 build, every later emitter change follows the plain
+   loop: build, regenerate, build, regenerate (until no diff).
+4. **Generated bytes change with std.** `std.zig.fmtString` passes valid UTF-8
+   through, so emitted literals change from `"\xe2\x86\x92"` to `"→"`. Golden
+   tests fail on that alone; regenerate them.
+5. **Review regenerated goldens by kind, not by line.** Normalise numbers and
+   names, then count distinct changed lines; every bucket must be a planned
+   rewrite:
+   ```bash
+   git diff -U0 test/golden | grep -E '^[-+][^-+]' | sed -E 's/^([-+])\s+/\1 /; s/[0-9]+/N/g; s/"[^"]*"/"S"/g' | sort | uniq -c | sort -rn
+   ```
+6. **Emitted patterns that broke, and their 0.17 forms:**
+
+   | Emitted 0.16 code | 0.17 |
+   |---|---|
+   | `var t: [R][C]i16 = .{.{0} ** C} ** R;` | `var t: [R][C]i16 = @splat(@splat(0));` |
+   | `for (@typeInfo(E).@"enum".fields) \|f\| arr[f.value] = …` | `for (@typeInfo(E).@"enum".field_values) \|v\| arr[v] = …` |
+   | `pub const Role = enum(u16) {};` (empty, but stored in structs) | `pub const Role = enum(u16) { _ };` (an empty *exhaustive* enum must be `noreturn`-backed, which makes it uninhabitable) |
+   | `return .{ .items = buf[0..len], .capacity = cap };` (ArrayList literal) | `var l: std.ArrayList(T) = .initBuffer(ptr[0..cap]); l.items.len = len; return l;` |
+   | `if (std.debug.runtime_safety) …` | `if (@import("builtin").optimize.runtimeSafety()) …` |
+   | `stack.getLast()` | `stack.last().?` |
+
+7. **Migrate the generator first, then its consumers.** Once the generator
+   emits 0.17 code, every consumer must be on 0.17 before it regenerates.
+   Copies of consumer code inside the generator's test suite become 0.17 and
+   are re-synced as each consumer migrates.
+8. **`zig fmt` 0.17 reformats files that were not fmt-clean** (it also
+   unquotes enum fields such as `@"true"` → `true` and realigns tables).
+   Expect layout churn in hand-maintained copies; review it, or land it in a
+   separate formatting commit.
+9. **Mechanical sweeps miss call-form arguments.** A pattern like
+   `std.fmt.allocPrint(IDENT, ` does not match `std.fmt.allocPrint(self.allocator(), …)`;
+   re-run the §23.2 sweep after every sed pass.
+
+### 23.6 Measured: what 0.17 does to speed
+
+From the parser-generator port above (Apple M5, ReleaseFast, best of two
+full benchmark runs per version, run-to-run noise ≈ 0.4%):
+
+| Measurement | 0.16 | 0.17 | Change |
+|---|---:|---:|---:|
+| generated MUMPS parser, parse 86.5 MB | 49.4 MB/s | 50.6 MB/s | +2.4% |
+| generated Rig parser, parse 3.8 MB | 56.6 MB/s | 58.7 MB/s | +3.7% |
+| generated lexers | 343.5 MB/s | 344.3 MB/s | unchanged |
+| the generator itself, large grammars | 15.1 ms | 16.3 ms | −8% (slower) |
+| the generator itself, small grammars | 2.34 ms | 2.35 ms | unchanged |
+
+The generator's slowdown is a code-generation effect, not more work: with
+identical page faults and memory, the 0.17 build retired **14% fewer
+instructions** but spent **8% more cycles** (lower IPC). Measure this kind of
+question with hardware counters, not wall time alone:
+
+```bash
+/usr/bin/time -l ./tool-016 input >/dev/null    # macOS: "instructions retired", "cycles elapsed"
+/usr/bin/time -l ./tool-017 input >/dev/null
+perf stat -e instructions,cycles ./tool input   # Linux
+```
+
+Expect a 0.16 → 0.17 port to be mostly a syntax and API update with a small
+throughput gain in hot loops; I/O-heavy programs see no change from the port
+itself. Compare A/B binaries side by side (build the pre-port commit with 0.16
+in a `git worktree`, interleave runs) before attributing any difference.
 
 ---
 
