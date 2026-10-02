@@ -23,11 +23,16 @@ the release notes → your memory. Your memory is the least reliable source for
 anything I/O-, allocator-, reflection- or build-related.
 
 ```bash
-zig version                      # must print 0.17.0
+zig version                      # must print 0.17.0 (if it prints 0.16.0, see below)
 zig env                          # .std_dir is the standard library source
 grep -n 'pub fn readFileAlloc' "$(zig env | sed -n 's/.*\.std_dir = "\(.*\)".*/\1/p')/Io/Dir.zig"
 zig test probe.zig               # settle any doubt with a probe
 ```
+
+If `zig version` prints an older Zig right after 0.17 was installed, the
+shell's `PATH` was captured before the install (common with version managers
+such as mise and long-lived editor or agent sessions). Put 0.17 first:
+`export PATH="$(mise where zig@0.17.0):$PATH"`, or open a new login shell.
 
 ---
 
@@ -153,7 +158,11 @@ until, migrated, since 0.17*. This guide itself is the one exception: its job
 is to map old spellings to new ones.
 
 **Delete, don't deprecate.** Remove superseded docs, helpers and dead
-compatibility branches outright. Git remembers them.
+compatibility branches outright. Git remembers them. Tooling counts too:
+test-harness, differential and benchmark options that exist only to run an
+old Zig or an old release of the project go (they usually cannot build on
+0.17 anyway); a tool that compares against an old binary takes its path as
+an argument instead.
 
 **Optimize brutally, measure honestly.** Record a benchmark baseline *before*
 the first edit, re-run it after, on the same machine and inputs, and quantify
@@ -2371,7 +2380,9 @@ Error text → cause → fix. Grouped by area; "0.17" marks messages new in
 4. **Unparseable syntax first** (so `zig fmt` can run): `**` repetition,
    `errdefer |err|`. Then `zig fmt` the touched files to auto-upgrade
    `@intFromEnum`/`@enumFromInt`. Format narrowly; a repo-wide `zig fmt` can
-   produce unrelated churn — review that separately.
+   produce unrelated churn — review that separately. Leave checked-in
+   generated files out of `zig fmt` and `zig fmt --check`: they are
+   regenerated, not hand-formatted.
 5. **Source, one API family at a time, compiling between each:** optimize
    mode / `std.builtin` → reflection (`@typeInfo`, `std.meta`) → allocators
    (`SafeAllocator`, `allocPrint`, `bufPrint*`, `dupeZ`, `stackFallback`) →
@@ -2451,6 +2462,10 @@ sed -i '' -E 's/std\.builtin\./std.lang./g' FILES
 - The §23.2 hard-break and trap sweeps are empty or every hit reviewed.
 - A representative Debug workload shows no order-of-magnitude slowdown.
 - `git diff` contains only intended migrations; CI and docs name 0.17.0.
+- The project's own docs are current: `AGENTS.md`/`README` name Zig 0.17 and
+  link this guide, notes written for an older Zig are deleted, benchmark
+  records hold the 0.17 numbers, and a handoff or state document (if the
+  project keeps one) describes where the work stands, in present tense.
 
 ### 23.5 Code generators and self-hosting projects
 
@@ -2756,6 +2771,9 @@ test dump {
 - Consolidated 0.15 → 0.16 field notes from four real migrations (a MUMPS
   engine, an embedded B+-tree database, a Clojure-dialect runtime, and a
   language compiler that emits Zig).
+- A complete 0.16 → 0.17 port of a self-hosting parser generator (517-test
+  suite, byte-exact golden outputs, before/after benchmarks), the source of
+  §23.5 and §23.6.
 - Community guides cross-checked (all written against 0.17.0-dev snapshots,
   so treat them as background only): "What Changed in Zig 0.17" (Zig Guide
   Live), `nzrsky/zig-skills`, codedb's `docs/zig-0.17-migration.md`. Where
