@@ -193,7 +193,7 @@ The bar is *neither sparse nor rambling*: everything a reader needs, and nothing
 ## Phase 7: Verify
 
 - **Build and lint:** a full build with warnings no higher than the baseline (ideally zero), plus the linters.
-- **Tests:** the full suite.
+- **Tests:** the full suite, and make sure it actually ran. Some build systems replay cached results for unchanged inputs (`zig build test` prints `run test cached` and runs nothing), so verify with a fresh cache directory (`--cache-dir`) or a clean build, and check that the reported test count is the real one.
 - **Platform matrix:** run the build and tests on every target platform. Reach each one however you can: locally, through a linked device, or over SSH.
   - When the user names roles, such as a Linux host and a macOS client, test that actual topology: the client on one OS talking to the host on the other.
   - Cross-compiling for a target (`zig build -Dtarget=…`, `cargo build --target …`) proves it builds, not that it runs. Report it as build-verified only.

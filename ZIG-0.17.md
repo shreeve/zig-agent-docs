@@ -413,6 +413,13 @@ The compiler will not find any of these. Grep for them.
     `ip6_only` defaults to `null` (OS default) instead of `false`;
     `Uri.parse` splits userinfo on the **last** `@`; `HostName.max_len` is 254.
 16. **`@typeInfo(enum {}).@"enum".tag_type` is `noreturn`**, not `u0`.
+17. **`zig build test` replays cached test results.** When nothing the tests
+    depend on changed, the run step prints `run test cached`, the summary
+    shows no "tests passed" count, and no test runs. A gate re-run on an
+    unchanged tree proves nothing: pass a fresh `--cache-dir` (or delete
+    `.zig-cache`) when the point is to run the tests again. There is no
+    flag that forces only the test runs; `--summary new` just hides cached
+    steps.
 
 ### 4.2 Carried over from 0.16 (still true in 0.17)
 
@@ -2202,6 +2209,7 @@ rc` remain as CLI subcommands.
 | new env vars | `ZIG_LOCAL_PKG_DIR`, `ZIG_BUILD_SUMMARY`, `ZIG_VERBOSE_CMD`, `ZIG_DEBUG_CMD` (compile the build system in Debug), `PKG_CONFIG` |
 | from 0.16, still valid | `--error-style verbose\|minimal\|verbose_clear\|minimal_clear`, `--multiline-errors indent\|newline\|none`, `--test-timeout 500ms`, `--fork`, `-fincremental --watch`, `--summary all` |
 | `libc.txt` | `gcc_dir` renamed `cc_dir` (old name still accepted); `cc_dir` required on Linux |
+| `zig cc` (Clang 22) | rejects `-mevex512` (*unknown clang option*): `evex512` is folded into `avx512f`, so drop the flag from C build scripts |
 
 Every `build.zig` compile error now ends with `referenced by: runPackageScript
 … lib/compiler/configurer.zig`; that frame is the configurer, not your bug.
@@ -2391,13 +2399,16 @@ Error text → cause → fix. Grouped by area; "0.17" marks messages new in
 6. **Silent traps by hand** (§4.1): `containsAtLeastScalar`, `@hasDecl`
    on private decls, relative Run path args, configure caching, BE
    `@bitCast`, `@tagName(builtin.mode)`.
-7. **Every target and mode.** Compile each published target (WASM and
+7. **Gates that really run.** Re-run the suite with a fresh `--cache-dir`
+   before calling it green; an unchanged tree replays cached results
+   (§4.1.17).
+8. **Every target and mode.** Compile each published target (WASM and
    freestanding separately: a native build hides target-only breakage) and
    `-Doptimize=safe|fast`. Use `-freference-trace=20` to find why host-only
    code is reachable.
-8. **Test with a real workload** in Debug and compare with the baseline.
-9. **Sweep** (§23.2) and update CI images, README and contributor docs to
-   0.17.0.
+9. **Test with a real workload** in Debug and compare with the baseline.
+10. **Sweep** (§23.2) and update CI images, README and contributor docs to
+    0.17.0.
 
 ### 23.2 Grep sweep (should all be empty, or every hit reviewed)
 
