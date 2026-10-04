@@ -2623,6 +2623,18 @@ of instructions retired; cold debug builds of nine emitted programs, which
 is mostly the Zig compiler's own time, take 8.1–8.4 s on 0.17 against 7.7 s
 on 0.16 (5–9% slower).
 
+An interpreter (bytecode VM, Apple M5 and x86-64): 0.17's LLVM inlines
+less. `std.mem.eql(u8, …)` and `std.hash.Wyhash.hash` became out-of-line
+calls at about 70 call sites that 0.16 inlined, which shrinks code and
+cut instructions on most rows (up to 19% fewer), but a hot handler that
+gains a call also gains a stack frame. A short-key compare written inline
+(overlapping 4-, 8- or 16-byte loads from both ends, `std.mem.eql` only
+past 32 bytes) restored the hot cache lookups; `@call(.always_inline,
+std.mem.eql, …)` does not, as it still calls `eqlBytes`. Some loops
+running the same or fewer instructions lost 1–6% of cycles to changed
+branch layout (a `cmp`/`jne` emitted as `test`/`je`): measure cycles
+across code placements, not instruction counts alone.
+
 Expect a 0.16 → 0.17 port to be mostly a syntax and API update with a small
 throughput gain in hot loops; I/O-heavy programs see no change from the port
 itself. Compare A/B binaries side by side (build the pre-port commit with 0.16
