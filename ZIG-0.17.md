@@ -477,6 +477,7 @@ helper:
 ```zig
 fn repeat(comptime s: []const u8, comptime n: usize) *const [s.len * n]u8 {
     return comptime blk: {
+        @setEvalBranchQuota(2 * n + 1000); // the default quota stops the loop past n = 1000
         var buf: [s.len * n]u8 = undefined;
         for (0..n) |i| @memcpy(buf[i * s.len ..][0..s.len], s);
         const final = buf;
@@ -488,7 +489,9 @@ fn repeat(comptime s: []const u8, comptime n: usize) *const [s.len * n]u8 {
 The error for leftover `**` is misleading: `error: binary operator '*' has
 whitespace on one side, but not the other` (spaced form) or `error: expected
 type 'type', found 'comptime_int'` (unspaced `x**16`). **`zig fmt` refuses to
-format the file** while any `**` repetition remains.
+format the file** while any `**` repetition remains, so its 0.17 upgrades
+(`@intFromEnum` → `@backingInt` and the rest) skip that file without a word:
+remove every `**` first, then run `zig fmt` again.
 
 ```zig
 // errdefer capture is gone. Plain `errdefer` still works.
@@ -2146,6 +2149,14 @@ Build-time file access uses `b.graph.io` (`std.Io.Dir.cwd().access(b.graph.io, p
   b.getInstallStep().dependOn(&to_checkout.step);
   b.installArtifact(exe); // PREFIX/bin/tool, zig-out/bin/tool without -p
   ```
+  When scripts build release copies elsewhere with `-p` and `bin/tool` must
+  stay as it is, make the copy the default step instead, and have those
+  scripts run `zig build install -p DIR`:
+  ```zig
+  const bin = b.step("bin", "Build bin/tool in the checkout (the default)");
+  bin.dependOn(&to_checkout.step);
+  b.default_step = bin; // `zig build` → bin/tool; `zig build install -p DIR` → DIR/bin/tool only
+  ```
 - `--cache-poison=pure` (default) / `poisoned` (never cache) / `disallowed`
   (panic when poisoned; good for CI) / `ignored`.
 - Debug configuration: `zig build --print-configuration` (ZON dump of the
@@ -2461,7 +2472,7 @@ rg -n 'b\.args|build_root|install_path|install_prefix|getInstallPath|pathFromRoo
 rg -n -- '--global-cache-dir|--zig-lib-dir|--build-runner|-Drelease|-Doptimize=Release|--release=Release' .
 
 # 0.17 deprecations (compile today, migrate anyway)
-rg -n --type zig '@intFromEnum|@enumFromInt|std\.builtin\.|builtin\.(cpu|os|abi|object_format)\b|builtin\.mode\b' .
+rg -n --type zig '@intFromEnum|@enumFromInt|std\.builtin\.|(builtin|@import\("builtin"\))\.(cpu|os|abi|object_format|mode)\b' .
 rg -n --type zig 'fmt\.allocPrint|fmt\.bufPrint|DebugAllocator|heap\.Check\b|getLast(OrNull)?\(' .
 rg -n --type zig 'IntegerBitSet|ArrayBitSet|StaticBitSet|DynamicBitSet|ArrayListUnmanaged|ArrayHashMapUnmanaged|lazyDependency|runAllowFail|addTranslateC|(Artifact|OutputFile|FileContent|OutputDirectory|Directory|DepFileOutput|File)Arg\(' .
 rg -n --type zig 'std\.mem\.(indexOf|lastIndexOf)|@intFromFloat|byteSwapAllFields|runtime_safety' .
@@ -2633,7 +2644,9 @@ past 32 bytes) restored the hot cache lookups; `@call(.always_inline,
 std.mem.eql, …)` does not, as it still calls `eqlBytes`. Some loops
 running the same or fewer instructions lost 1–6% of cycles to changed
 branch layout (a `cmp`/`jne` emitted as `test`/`je`): measure cycles
-across code placements, not instruction counts alone.
+across code placements, not instruction counts alone, and repeat a cycles
+run before believing it (one taken while the OS indexed files showed a row
++9.5% that read +0.1% on a quiet rerun).
 
 Expect a 0.16 → 0.17 port to be mostly a syntax and API update with a small
 throughput gain in hot loops; I/O-heavy programs see no change from the port
