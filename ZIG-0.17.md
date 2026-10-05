@@ -98,6 +98,12 @@ mostly 0.14/0.15. Most of it no longer compiles. Follow these rules:
    target/optimize mode builds, `zig fmt --check` passes on touched files, the
    §23 grep sweep is clean, and a representative workload in Debug is not
    dramatically slower than before.
+8. **Leave what you learn here.** When a port teaches something this guide
+   lacks (a trap, an error message, a std regression, a measurement), add
+   it where the next reader will look for it: §4 for silent traps, §22 for
+   error text, §24 for bugs, §23.6–§23.7 for speed. Verify it with a probe
+   first, and give the numbers. Facts about one project stay in that
+   project's own Zig notes, which link here instead of copying it.
 
 **Copy-paste bootstrap prompt for a fresh agent session:**
 
@@ -168,7 +174,7 @@ an argument instead.
 the first edit, re-run it after, on the same machine and inputs, and quantify
 run-to-run noise (run each side at least twice, interleave A/B runs).
 Numbers in docs are current measurements, stated plainly; a regression is
-reported with its cause, not hidden (§23.6).
+reported with its cause, not hidden (§23.6, §23.7).
 
 ---
 
@@ -370,11 +376,20 @@ The compiler will not find any of these. Grep for them.
    `build()` prints only on a cache miss. Declare inputs with
    `b.dependOnFileContents`/`dependOnFileMetadata`/`dependOnDirectoryContents`/
    `dependOnDirectoryMetadata`, or call `b.graph.poisonCache()`, or pass
-   `--cache-poison=poisoned`.
+   `--cache-poison=poisoned`. A documented `FOO=1 zig build test` breaks
+   twice over: `build()` keeps the value it saw first, and test Run steps
+   replay their cached results. Make it an option (`zig build test
+   -Dfoo`) and set the variable on each Run step with
+   `run.setEnvironmentVariable`, which puts it in the step's cache key.
+   Without `clearEnvironment()` that call copies the whole configure-time
+   environment into the cached configuration, so call it only when the
+   option is set.
 4. **Run-step path arguments and `addOptionPath` values are now relative**
    (`./build.zig`, `./zig-out`) where 0.16 passed absolute paths. Tools that
    `chdir` or resolve against another base break. Use the `…Arg2` variants with
-   `.make_absolute = true`.
+   `.make_absolute = true`. The path is relative to the step's own cwd: a
+   run with `setCwd` on a cache directory gets `../../../examples/x.nx`, and
+   anything that prints the path prints that.
 5. **Optimize-mode names print differently.** `@tagName(builtin.mode)` and
    `{t}` give `"debug"`/`"safe"`/`"fast"`/`"small"` instead of
    `"Debug"`/`"ReleaseSafe"`/…; anything that parses or compares those strings
@@ -586,6 +601,13 @@ const Pun = extern union { s: TwoBytes, i: u16 };
 Integer↔integer and integer↔packed `@bitCast`s are unchanged. If code relied
 on big-endian **memory order** of an array cast, use `@ptrCast` or
 `std.mem.readInt(T, &bytes, .big)` instead.
+
+**In a hot path, load words with `std.mem.readInt`, not an array
+`@bitCast`.** Being logical, an array cast is lowered element by element:
+`const w: [4]u64 = @bitCast([2][16]u8{ a[0..16].*, b[0..16].* })` made a
+hash's 17–240-byte path 3–9× slower than four `readInt(u64, …, .little)`
+calls (aarch64-macos, `-Ofast`). A 64-byte vector load is fastest through a
+pointer: `@as(*align(1) const @Vector(8, u64), @ptrCast(p)).*`.
 
 ### 5.4 Optimize modes and `@import("builtin")` (0.17)
 
@@ -1056,7 +1078,8 @@ limit is `error.StreamTooLong` (not `FileTooBig`). 0.17 adds
 
 ## 10. Files and directories
 
-`std.fs` keeps only `std.fs.path` (also reachable as `std.Io.Dir.path`).
+`std.fs` keeps only `std.fs.path`, itself deprecated in 0.17: write
+`std.Io.Dir.path` (and `std.Io.Dir.max_path_bytes`).
 Files and directories are `std.Io.File` and `std.Io.Dir`; nearly every method
 takes `io` right after the receiver.
 
@@ -2140,6 +2163,10 @@ Build-time file access uses `b.graph.io` (`std.Io.Dir.cwd().access(b.graph.io, p
   std.Io.Dir.cwd().access(b.graph.io, path, .{}) catch { b.graph.poisonCache(); return null; };
   b.dependOnFileMetadata(.{ .cwd_relative = path });
   ```
+- **A dependency on a file that does not exist fails the configuration**
+  (`error: configuration failed: FileSystemFailure`, no file named), though
+  the doc comments promise a re-run on creation. To notice a file appearing,
+  depend on its directory: `b.dependOnDirectoryContents(b.path(dirname))`.
 - **`build()` cannot see the install prefix** (`-p`). To keep a binary in
   the checkout (`bin/tool`) and still honor `-p`, copy it into the source
   tree as well as installing it (the executable bit is kept):
@@ -2447,7 +2474,8 @@ Error text → cause → fix. Grouped by area; "0.17" marks messages new in
    freestanding separately: a native build hides target-only breakage) and
    `-Doptimize=safe|fast`. Use `-freference-trace=20` to find why host-only
    code is reachable.
-9. **Test with a real workload** in Debug and compare with the baseline.
+9. **Test with a real workload** in Debug and compare with the baseline,
+   then run the release benchmarks A/B against the 0.16 build (§23.7).
 10. **Sweep** (§23.2) and update CI images, README and contributor docs to
     0.17.0.
 
@@ -2475,7 +2503,7 @@ rg -n -- '--global-cache-dir|--zig-lib-dir|--build-runner|-Drelease|-Doptimize=R
 rg -n --type zig '@intFromEnum|@enumFromInt|std\.builtin\.|(builtin|@import\("builtin"\))\.(cpu|os|abi|object_format|mode)\b' .
 rg -n --type zig 'fmt\.allocPrint|fmt\.bufPrint|DebugAllocator|heap\.Check\b|getLast(OrNull)?\(' .
 rg -n --type zig 'IntegerBitSet|ArrayBitSet|StaticBitSet|DynamicBitSet|ArrayListUnmanaged|ArrayHashMapUnmanaged|lazyDependency|runAllowFail|addTranslateC|(Artifact|OutputFile|FileContent|OutputDirectory|Directory|DepFileOutput|File)Arg\(' .
-rg -n --type zig 'std\.mem\.(indexOf|lastIndexOf)|@intFromFloat|byteSwapAllFields|runtime_safety' .
+rg -n --type zig 'std\.mem\.(indexOf|lastIndexOf)|@intFromFloat|byteSwapAllFields|runtime_safety|std\.fs\.|array_list\.Managed' .
 
 # 0.17 silent traps — review every hit
 rg -n --type zig 'containsAtLeastScalar\(' .
@@ -2648,10 +2676,46 @@ across code placements, not instruction counts alone, and repeat a cycles
 run before believing it (one taken while the OS indexed files showed a row
 +9.5% that read +0.1% on a quiet rerun).
 
+A Lisp runtime with an embedded database (Apple M5, 57 benchmark rows,
+0.16 and 0.17 builds alternating): about 2–4% faster overall, transient
+map and set construction 13–18% faster, after two fixes. Hashing went
+through `std.hash.XxHash3`, 3–60× slower in 0.17 (§24); a local copy with
+`readInt` loads (§5.3), checked against the published XXH3 vectors, put
+every hash row back. Map encoding lost 28% because three small encoder
+helpers (`header`, `named`, a ULEB128 writer) became calls; `inline fn` on
+them restored parity. One row, 4096 appends to a transient vector, stayed
+about 9% slower with the same code and calls on both: placement, not work.
+
 Expect a 0.16 → 0.17 port to be mostly a syntax and API update with a small
 throughput gain in hot loops; I/O-heavy programs see no change from the port
 itself. Compare A/B binaries side by side (build the pre-port commit with 0.16
 in a `git worktree`, interleave runs) before attributing any difference.
+
+### 23.7 Performance triage for a port
+
+What found every regression in the ports above, in order:
+
+1. **Build the pre-port commit with 0.16** in a scratch directory and keep
+   it as the A side. Run the whole benchmark suite A, B, B, A, and compare
+   the minimum of each row's medians across runs, not one run's.
+2. **Rerun only the rows that moved**, three or four times alternating. A
+   row that moves in one direction every time is real; the rest is load.
+3. **Diff the out-of-line symbols** of the two binaries for the module a
+   slow row exercises. A function that 0.16 inlined and 0.17 calls is the
+   usual cause:
+   ```bash
+   nm -n old/bin/tool | awk '$2 ~ /[tT]/ {print $3}' | grep -E 'codec|vector' | sort > a
+   nm -n new/bin/tool | awk '$2 ~ /[tT]/ {print $3}' | grep -E 'codec|vector' | sort > b
+   diff a b        # lines only in b: new calls; fix with `inline fn` on small hot helpers
+   ```
+4. **Suspect the standard library** when a row sits on a std primitive:
+   microbenchmark it alone on both toolchains (`zig build-exe -OReleaseFast`
+   with 0.16, `-Ofast` with 0.17).
+5. **Watch for a row reading 0 ns.** A function that becomes `inline` with
+   comptime arguments can fold a benchmark over constant input away; read
+   the input through a `volatile` pointer.
+6. **When code and calls match**, compare `cycles` with
+   `/usr/bin/time -l` across placements before chasing it further (§23.6).
 
 ---
 
@@ -2681,6 +2745,16 @@ in a `git worktree`, interleave runs) before attributing any difference.
   reliably overridden; response files with `std.Build.Step.Run` broke with the
   configurer/maker split; SPIR-V backend regressions.
 - LLVM loop vectorization remains disabled.
+- `std.hash.XxHash3.hash` is 2–9× slower than 0.16's for 17–240-byte
+  inputs and 30–60× slower above 240 (aarch64-macos, `-Ofast`: 241 bytes
+  517 ns against 8.4, 4 KiB 3.3 µs against 0.1). The values are
+  unchanged. The short paths build words with array `@bitCast` (§5.3); the
+  rewritten long path moves 64-byte stripes through an `extern struct`
+  and `@bitCast`. A copy that loads words with `std.mem.readInt` and stripes
+  through `*align(1) const @Vector(8, u64)` runs at 0.16's speed; pin it
+  to the published XXH3-64 vectors (seeds 0 and 1: `""` →
+  `0x2d06800538d394c2`, `"abc"` → `0x78af5f94892f3950`, the rest in
+  `lib/std/hash/xxhash.zig`'s tests) so it stays bit-identical.
 - A NaN converted to an integer is **not** safety-checked: `@trunc`,
   `@floor`, `@ceil`, `@round` with an integer result type, and the deprecated
   `@intFromFloat`, return 0 for NaN (aarch64-macos, debug and safe builds),
